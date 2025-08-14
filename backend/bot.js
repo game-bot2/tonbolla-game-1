@@ -1,56 +1,48 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const schedule = require('node-schedule');
-const express = require('express');
 const mongoose = require('mongoose');
-const User = require('./models/User');
+const { initBotWallet } = require('./ton-utils');
 const Game = require('./models/Game');
+const User = require('./models/User');
+const GameService = require('./services/gameService');
 
-// تنظیمات
+// Initialize
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL;
 const MONGODB_URI = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 3000;
 
-// اتصال به MongoDB
+// Connect to MongoDB
 mongoose.connect(MONGODB_URI)
-  .then(() => console.log('✅ Connected to MongoDB'))
+  .then(async () => {
+    console.log('✅ Connected to MongoDB');
+    await initBotWallet();
+  })
   .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// ایجاد ربات
-const bot = new TelegramBot(TOKEN, { 
-  polling: true
-});
+// Create bot
+const bot = new TelegramBot(TOKEN, { polling: true });
 
-// برنامه‌ریزی بازی هر ساعت
+// Schedule hourly games
 schedule.scheduleJob('0 * * * *', async () => {
   try {
-    const now = new Date();
-    const gameId = `G${now.getFullYear()}${now.getMonth()+1}${now.getDate()}${now.getHours()}`;
+    const game = await GameService.startNewGame();
+    console.log(`🚀 Game ${game.gameId} started at ${new Date().toISOString()}`);
     
-    const game = new Game({
-      gameId,
-      startTime: now,
-      status: 'active'
-    });
-    
-    await game.save();
-    
-    console.log(`🚀 Game ${gameId} started at ${now.toISOString()}`);
-    
-    // اطلاع‌رسانی به کاربران
+    // Notify users
     const users = await User.find({});
     for (const user of users) {
       try {
         bot.sendMessage(
           user.chatId,
-          '🎮 A new game is starting now! Join the game:',
+          '🎮 A new Tonbolla game is starting now! Join the game:',
           {
             reply_markup: {
               inline_keyboard: [
                 [{
                   text: 'Play Now',
-                  web_app: { url: `${WEBAPP_URL}?gameId=${gameId}&userId=${user.telegramId}` }
+                  web_app: { url: `${WEBAPP_URL}?gameId=${game.gameId}&userId=${user.telegramId}` }
                 }]
               ]
             }
@@ -65,17 +57,20 @@ schedule.scheduleJob('0 * * * *', async () => {
   }
 });
 
-// تولید کد دعوت
-function generateInviteCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < 8; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+// End active games every 50 minutes
+schedule.scheduleJob('50 * * * *', async () => {
+  try {
+    const activeGame = await Game.findOne({ status: 'active' });
+    if (activeGame) {
+      await GameService.endGame(activeGame.gameId);
+      console.log(`🏁 Game ${activeGame.gameId} ended at ${new Date().toISOString()}`);
+    }
+  } catch (err) {
+    console.error('Error ending game:', err);
   }
-  return code;
-}
+});
 
-// دستور /start
+// /start command
 bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
   try {
     const chatId = msg.chat.id;
@@ -158,6 +153,16 @@ bot.on('callback_query', async (query) => {
   }
 });
 
+// تولید کد دعوت
+function generateInviteCode() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
 // ارسال گزینه‌های دعوت
 async function sendInviteOptions(chatId, userId) {
   try {
@@ -215,7 +220,8 @@ async function sendUserStats(chatId, userId) {
       `👤 Invite Code: ${user.inviteCode}\n` +
       `👥 Friends Invited: ${user.invitedCount}\n` +
       `🎮 Games Played: ${gamesPlayed}\n` +
-      `🏆 Games Won: ${gamesWon}\n\n` +
+      `🏆 Games Won: ${gamesWon}\n` +
+      `💰 Total Won: ${user.totalWon || 0} TON\n\n` +
       `Keep playing to increase your stats!`,
       {
         reply_markup: {
@@ -278,8 +284,8 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// سرور ساده برای فعال نگه داشتن پروژه
+// Start server
+const express = require('express');
 const app = express();
-app.use(express.json());
 app.get('/', (req, res) => res.send('Tonbolla Bot is running!'));
-app.listen(PORT, () => console.log(`✅ Bot activated on port ${PORT}...`));
+app.listen(PORT, () => console.log(`✅ Bot running on port ${PORT}`));
