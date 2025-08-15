@@ -5,32 +5,54 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - '.github/workflows/Deploy.yml' # برای تست تغییرات خود workflow
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: '20'
+      
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Set up Node.js
+        with:
+          fetch-depth: 0  # برای دریافت کامل تاریخچه Git
+          
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           
       - name: Install dependencies
         working-directory: ./backend
-        run: npm ci --omit=dev
-        
+        run: |
+          npm ci --omit=dev
+          npm cache clean --force
+          
+      - name: Lint and test
+        working-directory: ./backend
+        run: |
+          npm run lint --if-present
+          npm run test --if-present
+          
       - name: Build project
         working-directory: ./backend
         run: npm run build --if-present
         
+      - name: Verify deployment package
+        run: |
+          echo "Verifying backend files:"
+          ls -la backend/
+          [ -f backend/package.json ] || exit 1
+          
       - name: Deploy to Render
         uses: render-actions/deploy@v1
         with:
           serviceId: ${{ srv-d2f4sfbuibrs73f9o0q0 }}
-          apiKey: ${{ rnd_WEZI46YDsefeI0d6uqKAoE24w60T }}
+          apiKey: ${{ rnd_wUsGDb1N7KuqqBYHO5OWkgYrSZme }}
           branch: main
           waitForDeploy: true
+          environment: production
+        timeout-minutes: 15  # افزایش زمان انتظار
