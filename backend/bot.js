@@ -6,6 +6,7 @@ const { initBotWallet } = require('./ton-utils');
 const Game = require('./models/Game');
 const User = require('./models/User');
 const GameService = require('./services/gameService');
+const express = require('express');
 
 // Initialize
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -13,16 +14,27 @@ const WEBAPP_URL = process.env.WEBAPP_URL;
 const MONGODB_URI = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 3000;
 
+// Create Express app and bot
+const app = express();
+const bot = new TelegramBot(TOKEN, { polling: true });
+
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
   .then(async () => {
     console.log('✅ Connected to MongoDB');
-    await initBotWallet();
+    
+    try {
+      await initBotWallet();
+      console.log('✅ TON Wallet initialized');
+    } catch (err) {
+      console.error('❌ TON Wallet initialization error:', err);
+    }
+    
+    // Start server after DB connection
+    app.get('/', (req, res) => res.send('Tonbolla Bot is running!'));
+    app.listen(PORT, () => console.log(`✅ Bot running on port ${PORT}`));
   })
   .catch(err => console.error('❌ MongoDB connection error:', err));
-
-// Create bot
-const bot = new TelegramBot(TOKEN, { polling: true });
 
 // Schedule hourly games
 schedule.scheduleJob('0 * * * *', async () => {
@@ -34,7 +46,7 @@ schedule.scheduleJob('0 * * * *', async () => {
     const users = await User.find({});
     for (const user of users) {
       try {
-        bot.sendMessage(
+        await bot.sendMessage(
           user.chatId,
           '🎮 A new Tonbolla game is starting now! Join the game:',
           {
@@ -75,7 +87,7 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
   try {
     const chatId = msg.chat.id;
     const telegramId = msg.from.id;
-    const username = msg.from.username || `${msg.from.first_name}${msg.from.last_name || ''}`;
+    const username = msg.from.username || `${msg.from.first_name}${msg.from.last_name ? ' ' + msg.from.last_name : ''}`;
     const firstName = msg.from.first_name;
     const lastName = msg.from.last_name || '';
     const referralCode = match && match[1] ? match[1] : null;
@@ -101,7 +113,7 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
         referrer.invitedCount += 1;
         await referrer.save();
         
-        bot.sendMessage(
+        await bot.sendMessage(
           referrer.chatId,
           `🎉 ${firstName} ${lastName} joined using your invite link! You now have ${referrer.invitedCount} referrals.`
         );
@@ -127,10 +139,10 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
     };
     
     // ارسال پیام با دکمه
-    bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       `✨ Welcome to Tonbolla Game!\nYour invite code: ${user.inviteCode}`,
-      { reply_markup: JSON.stringify(keyboard) }
+      { reply_markup: keyboard } // حذف JSON.stringify
     );
   } catch (err) {
     console.error('Error in /start command:', err);
@@ -144,9 +156,11 @@ bot.on('callback_query', async (query) => {
     const userId = query.from.id;
     
     if (query.data === 'invite') {
-      await sendInviteOptions(chatId, userId);
+      await sendInviteOptions(bot, chatId, userId);
     } else if (query.data === 'stats') {
-      await sendUserStats(chatId, userId);
+      await sendUserStats(bot, chatId, userId);
+    } else if (query.data === 'back_to_main' || query.data === 'copy_invite') {
+      await handleBackAction(bot, query);
     }
   } catch (err) {
     console.error('Error handling callback query:', err);
@@ -164,14 +178,14 @@ function generateInviteCode() {
 }
 
 // ارسال گزینه‌های دعوت
-async function sendInviteOptions(chatId, userId) {
+async function sendInviteOptions(bot, chatId, userId) {
   try {
     const user = await User.findOne({ telegramId: userId });
     if (!user) return;
     
-    const inviteLink = `https://t.me/${bot.options.username}?start=${user.inviteCode}`;
+    const inviteLink = `https://t.me/${(await bot.getMe()).username}?start=${user.inviteCode}`;
     
-    bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       `📣 Invite your friends and earn rewards!\n\n` +
       `Your personal invite link:\n${inviteLink}\n\n` +
@@ -201,7 +215,7 @@ async function sendInviteOptions(chatId, userId) {
 }
 
 // ارسال آمار کاربر
-async function sendUserStats(chatId, userId) {
+async function sendUserStats(bot, chatId, userId) {
   try {
     const user = await User.findOne({ telegramId: userId });
     if (!user) return;
@@ -214,7 +228,7 @@ async function sendUserStats(chatId, userId) {
       winner: user._id 
     });
     
-    bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       `📊 Your Game Stats:\n\n` +
       `👤 Invite Code: ${user.inviteCode}\n` +
@@ -240,52 +254,44 @@ async function sendUserStats(chatId, userId) {
 }
 
 // بازگشت به منوی اصلی
-bot.on('callback_query', async (query) => {
+async function handleBackAction(bot, query) {
   try {
-    if (query.data === 'back_to_main' || query.data === 'copy_invite') {
-      const chatId = query.message.chat.id;
-      const userId = query.from.id;
-      const user = await User.findOne({ telegramId: userId });
-      
-      if (query.data === 'copy_invite') {
-        bot.answerCallbackQuery(query.id, {
-          text: 'Invite link copied to clipboard!',
-          show_alert: false
-        });
-      }
-      
-      if (user) {
-        bot.sendMessage(
-          chatId,
-          `✨ Welcome back to Tonbolla Game!\nYour invite code: ${user.inviteCode}`,
-          {
-            reply_markup: {
-              inline_keyboard: [
-                [{
-                  text: '🎮 Play Game',
-                  web_app: { url: `${WEBAPP_URL}?userId=${userId}` }
-                }],
-                [{
-                  text: '👥 Invite Friends',
-                  callback_data: 'invite'
-                }],
-                [{
-                  text: '🏆 My Stats',
-                  callback_data: 'stats'
-                }]
-              ]
-            }
+    const chatId = query.message.chat.id;
+    const userId = query.from.id;
+    const user = await User.findOne({ telegramId: userId });
+    
+    if (query.data === 'copy_invite') {
+      await bot.answerCallbackQuery(query.id, {
+        text: 'Invite link copied to clipboard!',
+        show_alert: false
+      });
+    }
+    
+    if (user) {
+      await bot.sendMessage(
+        chatId,
+        `✨ Welcome back to Tonbolla Game!\nYour invite code: ${user.inviteCode}`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{
+                text: '🎮 Play Game',
+                web_app: { url: `${WEBAPP_URL}?userId=${userId}` }
+              }],
+              [{
+                text: '👥 Invite Friends',
+                callback_data: 'invite'
+              }],
+              [{
+                text: '🏆 My Stats',
+                callback_data: 'stats'
+              }]
+            ]
           }
-        );
-      }
+        }
+      );
     }
   } catch (err) {
     console.error('Error handling back action:', err);
   }
-});
-
-// Start server
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('Tonbolla Bot is running!'));
-app.listen(PORT, () => console.log(`✅ Bot running on port ${PORT}`));
+}
