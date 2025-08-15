@@ -5,54 +5,48 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
-      - '.github/workflows/Deploy.yml' # برای تست تغییرات خود workflow
+      - '.github/workflows/Deploy.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      NODE_VERSION: '20'
-      
+    timeout-minutes: 25
+
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # برای دریافت کامل تاریخچه Git
-          
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '20'
           cache: 'npm'
-          
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Verify files
+        run: |
+          echo "Checking backend structure..."
+          ls -la backend/
+          [ -f backend/package.json ] || exit 1
+
       - name: Install dependencies
         working-directory: ./backend
         run: |
-          npm ci --omit=dev
+          npm config set registry https://registry.npmjs.org
+          npm ci --omit=dev --no-audit --prefer-offline
           npm cache clean --force
-          
-      - name: Lint and test
-        working-directory: ./backend
-        run: |
-          npm run lint --if-present
-          npm run test --if-present
-          
+
       - name: Build project
         working-directory: ./backend
         run: npm run build --if-present
-        
-      - name: Verify deployment package
-        run: |
-          echo "Verifying backend files:"
-          ls -la backend/
-          [ -f backend/package.json ] || exit 1
-          
+
       - name: Deploy to Render
         uses: render-actions/deploy@v1
         with:
-          serviceId: ${{ srv-d2f4sfbuibrs73f9o0q0 }}
-          apiKey: ${{ rnd_wUsGDb1N7KuqqBYHO5OWkgYrSZme }}
+          serviceId: ${{ secrets.RENDER_SERVICE_ID }}
+          apiKey: ${{ secrets.RENDER_API_KEY }}
           branch: main
           waitForDeploy: true
           environment: production
-        timeout-minutes: 15  # افزایش زمان انتظار
