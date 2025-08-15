@@ -30,7 +30,7 @@ jobs:
       - name: Deploy to Render
         uses: render-actions/deploy@v1
         with:
-          serviceId: ${{ secrets.RENDER_SERVICE_ID }}
-          apiKey: ${{ secrets.RENDER_API_KEY }}
+          serviceId: ${{ srv-d2f4sfbuibrs73f9o0q0 }}
+          apiKey: ${{ rnd_WEZI46YDsefeI0d6uqKAoE24w60T }}
           branch: main
           waitForDeploy: true
